@@ -1,53 +1,64 @@
 import mxnet as mx
-import matplotlib as mpl
 import numpy as np
 import Tkinter as tk
 import array
-from mxnet import nd
-from matplotlib import pyplot as plt
 from PIL import Image, ImageDraw
 
 def transform (data, label):
-	return (nd.floor (data/128)).astype (np.float32), label.astype (np.float32)
+	return (mx.nd.floor (data/128)).astype (np.float32), label.astype (np.float32)
 
 print "Getting Training Data..."
-mnist_train = mx.gluon.data.vision.MNIST (root="./mnist", train=True, transform=transform)
-mnist_test  = mx.gluon.data.vision.MNIST (root="./mnist", train=False, transform=transform)
-
-ycount = nd.ones (shape= (10))
-xcount = nd.ones (shape= (784, 10))
-
-print "Training Neural Network..."
-for data, label in mnist_train:
-	x = data.reshape ((784,))
-	y = int (label)
-	ycount[y] += 1
-	xcount[:, y] += x
-
-print "Computing Training Distributions..."
-for i in range (10):
-	xcount[:, i] = xcount[:, i]/ycount[i]
-
-py = ycount / nd.sum (ycount)
+trainData = mx.gluon.data.vision.MNIST (root="./mnist", train=True,  transform=transform)
+testData  = mx.gluon.data.vision.MNIST (root="./mnist", train=False, transform=transform)
 
 #################
 ## Classifiers ##
 #################
-
+# will be right as many times as 4 appears in test data 9ish%
 class NumericalClassifier:
-	def __init__(self, py):
-		self.py = py
+	def __init__(self):
+		pass
+	def train (self, trainingData, testingData):
+		pass
+	def classify (self, image):
+		return 4 # chosen by fair dice roll. garunteed to be random
 
-	#default behavior is random
-	def classifyNumber (self, image):
-		probabilities = nd.ones (10) / 10
-		return nd.sample_multinomial (probabilities)[0]
+########
+# Bogo #
+########
+# le joke. 10% correct
+# https://en.wikipedia.org/wiki/Bogosort
+class BogoClassifier (NumericalClassifier):
+	def classify (self, image):
+		probabilities = mx.nd.ones (10) / 10
+		random = mx.nd.sample_multinomial (probabilities)
+		return random.asnumpy().item(0)
 
+##############
+# NaiveBayes #
+##############
+# trains 1 time. should be right about 84.26% of the time.
 class NaiveBayesClassifier (NumericalClassifier):
-	def classifyNumber (self, image):
-		logxcount = nd.log (xcount)
-		logxcountneg = nd.log (1-xcount)
-		logpy = nd.log (self.py)
+
+	def train (self, trainData, testData):
+		self.ycount = mx.nd.ones (shape= (10))
+		self.xcount = mx.nd.ones (shape= (784, 10))
+
+		for data, label in trainData:
+			x = data.reshape ((784,))
+			y = int (label)
+			self.ycount[y] += 1
+			self.xcount[:, y] += x
+
+		for i in range (10):
+			self.xcount[:, i] = self.xcount[:, i]/self.ycount[i]
+
+		self.py = self.ycount / mx.nd.sum (self.ycount)
+
+	def classify (self, image):
+		logxcount = mx.nd.log (self.xcount)
+		logxcountneg = mx.nd.log (1-self.xcount)
+		logpy = mx.nd.log (self.py)
 		x = image.reshape ((784,))
 
 		# we need to incorporate the prior probability p(y) since p(y|x) is
@@ -55,46 +66,74 @@ class NaiveBayesClassifier (NumericalClassifier):
 		logpx = logpy.copy ()
 		for i in range (10):
 			# compute the log probability for a digit
-			logpx[i] += nd.dot (logxcount[:, i], x) + nd.dot (logxcountneg[:, i], 1-x)
+			logpx[i] += mx.nd.dot (logxcount[:, i], x) + mx.nd.dot (logxcountneg[:, i], 1-x)
 
-		logpx -= nd.max (logpx)
+		logpx -= mx.nd.max (logpx)
 		# and compute the softmax using logpx
-		px = nd.exp (logpx).asnumpy ()
+		px = mx.nd.exp (logpx).asnumpy ()
 		px /= np.sum (px)
 
 		return np.argmax (px)
 
-print "Selecting NaiveBayesClassifier..."
-classifier = NaiveBayesClassifier (py)
+#####################
+# AdamRMSClassifier #
+#####################
+class AdamRMSClassifier (NumericalClassifier):
 
-#########################
-## Testing Correctness ##
-#########################
+	def train (self, trainData, testData):
+		pass
 
-print "Classifying whole test set..."
+	def classify (self, image):
+		return 4
 
+###########
+# OPTIONS #
+###########
+
+# classifier = NumericalClassifier ()
+# classifier = BogoClassifier ()
+classifier = NaiveBayesClassifier ()
+# classifier = AdamRMSClassifier ()
+useGPU = False
+
+print "options:"
+print "\tclassifier: " + classifier.__class__.__name__
+print "\tuseGPU    : " + str (useGPU)
+
+if useGPU:
+	MXNET_DEVICE = mx.gpu
+	BATCH_SIZE = 128
+	trainDataOnDevice = mx.nd.array(trainData, ctx=MXNET_DEVICE())
+	testDataOnDevice  = mx.nd.array(testData, ctx=MXNET_DEVICE())
+else:
+	MXNET_DEVICE = mx.cpu
+	BATCH_SIZE = 16
+	trainDataOnDevice = trainData
+	testDataOnDevice = testData
+
+
+
+print "Training Neural Network..."
+classifier.train(trainDataOnDevice, testDataOnDevice)
+
+
+print "Testing Correctness..."
 correct = 0
-for data, label in mnist_test:
-
-	guess = classifier.classifyNumber(data);
+for data, label in testDataOnDevice:
+	guess = classifier.classify(data);
 	if int (guess) == int (label):
 		correct += 1
+print "Percent Correct: " + str ((float (correct) / float (len (testDataOnDevice)) * 100.0)) + "%"
 
-print "Test Data Correctly Guessed: " + str ((float (correct) / float (len (mnist_test)) * 100.0))
 
-####################
-## User Interface ##
-####################
-
-print "launching UI to let you try it out."
-
+print "launching UI."
 class Application (tk.Frame):
   
 	global py
 
 	lastx = 0
 	lasty = 0
-	numericalClassifier = {}
+	classifier = {}
 
 	def mouseDownEventHandler (self, event):
 		self.lastx, self.lasty = event.x, event.y
@@ -102,7 +141,7 @@ class Application (tk.Frame):
 	def mouseUpEventHandler (self, event):
 		self.addLine (event)
 		data = self.canvasToImage ()
-		predictedNumber = self.numericalClassifier.classifyNumber (data)
+		predictedNumber = self.classifier.classify (data)
 		self.predictedNumber.set (str (predictedNumber))
 
 	def addLine (self, event):
@@ -121,7 +160,7 @@ class Application (tk.Frame):
 	def canvasToImage (self):
 		smaller = self.image.resize ((28, 28), resample=Image.NEAREST)
 		bytes = array.array("B", bytearray (smaller.tobytes ()))
-		reshaped = nd.array (bytes).reshape (28,28,1)
+		reshaped = mx.nd.array (bytes).reshape (28,28,1)
 		normalized = reshaped / 255.0
 		return normalized
 
@@ -143,10 +182,10 @@ class Application (tk.Frame):
 		self.output = tk.Label (self, fg="white", textvariable=self.predictedNumber)
 		self.output.pack (side="bottom", fill="both")
 
-	def __init__ (self, master, numericalClassifier):
+	def __init__ (self, master, classifier):
 		tk.Frame.__init__ (self, master)
 		self.master = master
-		self.numericalClassifier = numericalClassifier
+		self.classifier = classifier
 		self.pack ()
 		self.createWidgets ()
 
@@ -154,23 +193,3 @@ if __name__ == "__main__":
 	root = tk.Tk ()
 	Application (root, classifier).pack (fill="both", expand=True)
 	root.mainloop ()
-	
-#################
-## Data Parser ##
-#################
-# def nextInt(file):
-# 	return int(file.read(4).encode('hex'), 16)
-
-# def assertInt(file, expected):
-# 	byte = file.tell()
-# 	actual = nextInt(file)
-# 	if not actual == expected:
-# 		raise Exception(file.name + ":" + str(byte) + " - " + str(actual) + " found " + str(expected) + " expected")
-
-# def parseLabels(fileName):
-# 	with open(fileName, "rb") as file:
-# 		assertInt(file, 2049)
-# 		quantity = nextInt(file)
-# 		labels = bytearray()
-# 		labels.extend(file.read(quantity))
-# 		return labels
